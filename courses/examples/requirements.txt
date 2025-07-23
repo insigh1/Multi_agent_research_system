@@ -1,0 +1,53 @@
+# Core dependencies for Multi-Agent Research System Course Examples
+aiohttp>=3.9.0
+python-dotenv>=1.0.0
+asyncio-throttle>=1.0.2
+structlog>=23.2.0
+
+# Enhanced dependencies for modules 5-10
+redis>=5.0.0
+sqlalchemy>=2.0.0
+prometheus-client>=0.19.0
+psutil>=5.9.0
+docker>=6.1.0
+fastapi>=0.104.0
+uvicorn>=0.24.0
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+
+# Tier 1 Enterprise modules (11-13) - Security, Privacy, DevOps
+cryptography>=41.0.0
+pyjwt>=2.8.0
+passlib>=1.7.4
+bcrypt>=4.1.0
+redis>=5.0.0
+fastapi-limiter>=0.1.6
+httpx>=0.25.0
+tenacity>=8.2.3
+
+# Data Privacy & Compliance (Module 12)
+# cryptography already included above
+sqlite3  # Built-in to Python
+
+# DevOps & CI/CD (Module 13)
+# docker already included above
+pyyaml>=6.0.1
+jinja2>=3.1.2
+
+# Optional but recommended
+black>=23.10.0
+flake8>=6.1.0
+isort>=5.12.0
+pre-commit>=3.5.0
+
+# Testing and Quality Assurance (Module 9)
+unittest-mock>=1.0.0
+
+# Optional Dependencies (commented out - install as needed)
+# redis>=4.5.0  # For distributed caching
+# docker>=6.0.0  # For containerization
+# numpy>=1.24.0  # For advanced analytics
+# pandas>=2.0.0  # For data processing
+# matplotlib>=3.7.0  # For visualization
+# seaborn>=0.12.0  # For statistical visualization 

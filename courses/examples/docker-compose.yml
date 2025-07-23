@@ -1,0 +1,44 @@
+services:
+  nginx:
+    depends_on:
+    - research-system
+    image: nginx:alpine
+    ports:
+    - 80:80
+    volumes:
+    - ./nginx.conf:/etc/nginx/nginx.conf
+  prometheus:
+    image: prom/prometheus
+    ports:
+    - 9091:9090
+    volumes:
+    - ./prometheus.yml:/etc/prometheus/prometheus.yml
+  research-system:
+    build: .
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    environment:
+    - FIREWORKS_API_KEY=${FIREWORKS_API_KEY}
+    - LOG_LEVEL=INFO
+    - WORKERS=4
+    healthcheck:
+      interval: 30s
+      retries: 3
+      start_period: 40s
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:8080/health
+      timeout: 10s
+    ports:
+    - 8080:8080
+    - 9090:9090
+version: '3.8'

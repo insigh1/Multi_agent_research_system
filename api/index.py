@@ -11,17 +11,11 @@ sys.path.insert(0, str(backend_dir))
 
 # Import the FastAPI app from web_ui
 try:
-    from backend.web_ui import app
-except ImportError:
-    # Fallback import method
-    import sys
-    sys.path.append('../backend')
     from web_ui import app
-
-# Export the app for Vercel
-def handler(request):
-    """Vercel handler function"""
-    return app
+except ImportError:
+    # Alternative import path
+    sys.path.append(str(backend_dir))
+    from web_ui import app
 
 # For local testing
 if __name__ == "__main__":

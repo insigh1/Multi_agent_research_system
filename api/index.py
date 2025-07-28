@@ -5,7 +5,7 @@ import sys
 import os
 from pathlib import Path
 
-# Add the backend directory to the Python path
+# Add the backend directory to the Python path  
 backend_dir = Path(__file__).parent.parent / 'backend'
 sys.path.insert(0, str(backend_dir))
 
@@ -16,6 +16,11 @@ except ImportError:
     # Alternative import path
     sys.path.append(str(backend_dir))
     from web_ui import app
+
+# Vercel handler function
+def handler(request):
+    """Vercel serverless handler"""
+    return app
 
 # For local testing
 if __name__ == "__main__":

@@ -41,37 +41,63 @@ export const api = {
   }
 };
 
-export const createWebSocketConnection = (sessionId, callbacks) => {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}/ws/${sessionId}`;
+export const createSSEConnection = (sessionId, callbacks) => {
+  const sseUrl = `/api/events/${sessionId}`;
   
-  console.log('Connecting to WebSocket:', wsUrl);
-  const ws = new WebSocket(wsUrl);
+  console.log('Connecting to SSE:', sseUrl);
+  const eventSource = new EventSource(sseUrl);
   
-  ws.onopen = () => {
-    console.log('WebSocket connected successfully');
+  eventSource.onopen = () => {
+    console.log('SSE connected successfully');
     callbacks.onOpen?.();
   };
   
-  ws.onmessage = (event) => {
-    console.log('WebSocket message received:', event.data);
+  eventSource.onmessage = (event) => {
+    console.log('SSE message received:', event.data);
     try {
       const data = JSON.parse(event.data);
+      
+      // Handle close message
+      if (data.type === 'close') {
+        eventSource.close();
+        callbacks.onClose?.();
+        return;
+      }
+      
+      // Handle error message
+      if (data.type === 'error') {
+        console.error('SSE error received:', data.message);
+        callbacks.onError?.(new Error(data.message));
+        eventSource.close();
+        return;
+      }
+      
       callbacks.onMessage?.(data);
     } catch (err) {
-      console.error('Error parsing WebSocket message:', err);
+      console.error('Error parsing SSE message:', err);
     }
   };
   
-  ws.onerror = (error) => {
-    console.error('WebSocket error:', error);
+  eventSource.onerror = (error) => {
+    console.error('SSE error:', error);
     callbacks.onError?.(error);
+    eventSource.close();
   };
   
-  ws.onclose = (event) => {
-    console.log('WebSocket disconnected:', event.code, event.reason);
-    callbacks.onClose?.(event);
+  // Return an object with a close method for compatibility
+  return {
+    close: () => {
+      eventSource.close();
+    },
+    readyState: eventSource.readyState,
+    CONNECTING: EventSource.CONNECTING,
+    OPEN: EventSource.OPEN,
+    CLOSED: EventSource.CLOSED
   };
-  
-  return ws;
+};
+
+// Legacy WebSocket function - deprecated but kept for compatibility
+export const createWebSocketConnection = (sessionId, callbacks) => {
+  console.warn('WebSocket connection is deprecated. Please use createSSEConnection instead.');
+  return createSSEConnection(sessionId, callbacks);
 }; 

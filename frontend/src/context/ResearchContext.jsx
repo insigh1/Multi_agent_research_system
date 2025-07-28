@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useReducer, useCallback, useRef } from 'react';
-import { api, createWebSocketConnection } from '../utils/api';
+import { api, createSSEConnection } from '../utils/api';
 
 // Initial state
 const initialState = {
@@ -31,7 +31,7 @@ const initialState = {
   showModelConfig: false,
   error: null,
   
-  // WebSocket state
+  // SSE connection state
   isConnected: false
 };
 
@@ -60,7 +60,7 @@ const ActionTypes = {
   SET_ERROR: 'SET_ERROR',
   CLEAR_ERROR: 'CLEAR_ERROR',
   
-  // WebSocket
+  // SSE Connection
   WEBSOCKET_CONNECTED: 'WEBSOCKET_CONNECTED',
   WEBSOCKET_DISCONNECTED: 'WEBSOCKET_DISCONNECTED',
   
@@ -313,15 +313,12 @@ export const ResearchProvider = ({ children }) => {
         if (data.session_id) {
           enhancedDispatch({ type: ActionTypes.SET_SESSION, sessionId: data.session_id });
           
-          // Connect WebSocket for real-time updates
-          const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-          const wsUrl = `${protocol}//${window.location.host}/ws/${data.session_id}`;
-          
+          // Connect SSE for real-time updates (Vercel compatible)
           if (wsRef.current) {
             wsRef.current.close();
           }
           
-          wsRef.current = createWebSocketConnection(data.session_id, {
+          wsRef.current = createSSEConnection(data.session_id, {
             onMessage: (progress) => {
               enhancedDispatch({ type: ActionTypes.UPDATE_PROGRESS, progress });
               
@@ -347,7 +344,7 @@ export const ResearchProvider = ({ children }) => {
             },
             onError: (error) => {
               enhancedDispatch({ type: ActionTypes.WEBSOCKET_DISCONNECTED });
-              enhancedDispatch({ type: ActionTypes.SET_ERROR, error: 'WebSocket connection failed' });
+              enhancedDispatch({ type: ActionTypes.SET_ERROR, error: 'SSE connection failed' });
             }
           });
         } else {

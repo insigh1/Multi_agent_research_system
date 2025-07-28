@@ -20,15 +20,17 @@ import json
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, AsyncGenerator
 import logging
 import time
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
-from fastapi.responses import HTMLResponse, FileResponse, Response
+from fastapi.responses import HTMLResponse, FileResponse, Response, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
+from sse_starlette import EventSourceResponse
+import threading
 
 # Import our existing research system with fallback handling
 # First try: assume we're being called as a module (from root entry point)
@@ -89,46 +91,75 @@ class ResearchResponse(BaseModel):
 class ModelConfigUpdateRequest(BaseModel):
     agent_models: Dict[str, str]  # agent_type -> model_name mapping
 
-# WebSocket connection manager
-class ConnectionManager:
+# SSE connection manager for Vercel compatibility
+class SSEConnectionManager:
     def __init__(self):
-        self.active_connections: Dict[str, WebSocket] = {}
+        self.active_sessions: Dict[str, dict] = {}
+        self.session_lock = threading.Lock()
     
-    async def connect(self, websocket: WebSocket, session_id: str):
-        await websocket.accept()
-        self.active_connections[session_id] = websocket
-        logger.info(f"WebSocket connected for session {session_id}")
+    def create_session(self, session_id: str):
+        """Create a new SSE session"""
+        with self.session_lock:
+            self.active_sessions[session_id] = {
+                'messages': [],
+                'last_message_id': 0,
+                'created_at': time.time()
+            }
+            logger.info(f"SSE session created for {session_id}")
     
-    def disconnect(self, session_id: str):
-        if session_id in self.active_connections:
-            del self.active_connections[session_id]
-            logger.info(f"WebSocket disconnected for session {session_id}")
+    def add_message(self, session_id: str, data: dict):
+        """Add a message to the session queue"""
+        with self.session_lock:
+            if session_id not in self.active_sessions:
+                self.create_session(session_id)
+            
+            session = self.active_sessions[session_id]
+            session['last_message_id'] += 1
+            message = {
+                'id': session['last_message_id'],
+                'data': data,
+                'timestamp': time.time()
+            }
+            session['messages'].append(message)
+            
+            # Keep only last 100 messages to prevent memory issues
+            if len(session['messages']) > 100:
+                session['messages'] = session['messages'][-100:]
+            
+            logger.debug(f"Message added to SSE session {session_id}: {data.get('current_operation', 'No operation')}")
     
-    async def send_progress_update(self, session_id: str, data: dict):
-        """Send progress update to a specific session"""
-        if session_id in self.active_connections:
-            websocket = self.active_connections[session_id]
-            try:
-                # Debug logging for completion updates
-                if data.get("status") == "completed":
-                    print(f"📡 WebSocket sending completion data:")
-                    print(f"   Session: {session_id}")
-                    print(f"   Steps completed: {data.get('steps_completed', 'NOT_FOUND')}")
-                    print(f"   Final metrics steps: {data.get('final_metrics', {}).get('steps_completed', 'NOT_FOUND')}")
-                    print(f"   Keep metrics visible: {data.get('keep_metrics_visible', 'NOT_FOUND')}")
-                
-                await websocket.send_text(json.dumps(data))
-                logger.debug(f"Progress update sent to session {session_id}: {data.get('current_operation', 'No operation')}")
-            except Exception as e:
-                logger.error(f"Failed to send progress update to session {session_id}: {e}")
-                # Remove the failed connection
-                del self.active_connections[session_id]
-        else:
-            logger.warning(f"No active WebSocket connection for session {session_id}")
+    def get_messages(self, session_id: str, last_id: int = 0) -> list:
+        """Get messages after the specified ID"""
+        with self.session_lock:
+            if session_id not in self.active_sessions:
+                return []
+            
+            session = self.active_sessions[session_id]
+            return [msg for msg in session['messages'] if msg['id'] > last_id]
+    
+    def cleanup_session(self, session_id: str):
+        """Clean up session after completion or timeout"""
+        with self.session_lock:
+            if session_id in self.active_sessions:
+                del self.active_sessions[session_id]
+                logger.info(f"SSE session cleaned up for {session_id}")
+    
+    def cleanup_old_sessions(self, max_age_hours: int = 24):
+        """Clean up sessions older than max_age_hours"""
+        cutoff_time = time.time() - (max_age_hours * 3600)
+        with self.session_lock:
+            expired_sessions = [
+                sid for sid, session in self.active_sessions.items()
+                if session['created_at'] < cutoff_time
+            ]
+            for sid in expired_sessions:
+                del self.active_sessions[sid]
+            if expired_sessions:
+                logger.info(f"Cleaned up {len(expired_sessions)} expired SSE sessions")
 
 # Global instances
 app = FastAPI(title="Multi-Agent Research System", version="2.0")
-connection_manager = ConnectionManager()
+sse_manager = SSEConnectionManager()
 active_research_tasks: Dict[str, asyncio.Task] = {}
 
 # CORS middleware for development
@@ -289,16 +320,59 @@ async def get_research_metrics(session_id: str):
         logger.error(f"Failed to get metrics: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/events/{session_id}")
+async def sse_endpoint(session_id: str):
+    """Server-Sent Events endpoint for real-time progress updates (Vercel compatible)"""
+    
+    async def event_generator() -> AsyncGenerator[str, None]:
+        last_id = 0
+        
+        # Create session if it doesn't exist
+        sse_manager.create_session(session_id)
+        
+        while True:
+            try:
+                # Get new messages
+                messages = sse_manager.get_messages(session_id, last_id)
+                
+                for message in messages:
+                    last_id = message['id']
+                    data = message['data']
+                    
+                    # Format as SSE
+                    yield f"id: {message['id']}\n"
+                    yield f"data: {json.dumps(data)}\n\n"
+                    
+                    # If this is a completion message, send a final event and break
+                    if data.get('status') == 'completed' or data.get('status') == 'error':
+                        yield f"data: {json.dumps({'type': 'close'})}\n\n"
+                        # Schedule cleanup after a delay
+                        asyncio.create_task(cleanup_session_after_delay(session_id))
+                        return
+                
+                # Wait before checking for new messages
+                await asyncio.sleep(0.5)
+                
+            except Exception as e:
+                logger.error(f"SSE error for session {session_id}: {e}")
+                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+                break
+    
+    return EventSourceResponse(event_generator())
+
+async def cleanup_session_after_delay(session_id: str, delay: int = 30):
+    """Clean up session after a delay to allow client to receive final messages"""
+    await asyncio.sleep(delay)
+    sse_manager.cleanup_session(session_id)
+
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
     """WebSocket endpoint for real-time progress updates"""
-    await connection_manager.connect(websocket, session_id)
-    try:
-        while True:
-            # Keep connection alive
-            await asyncio.sleep(1)
-    except WebSocketDisconnect:
-        connection_manager.disconnect(session_id)
+    # This endpoint is now deprecated for SSE, but kept for compatibility
+    # The SSE endpoint will handle all progress updates
+    await websocket.accept()
+    await websocket.close()
+    logger.warning(f"WebSocket connection for session {session_id} received, but SSE is preferred. Closing WebSocket.")
 
 async def run_research_with_progress(request: ResearchRequest, session_id: str):
     """Run research with enhanced progress updates via WebSocket"""
@@ -325,7 +399,7 @@ async def run_research_with_progress(request: ResearchRequest, session_id: str):
         ]
         
         # Send initial progress with stage breakdown
-        await connection_manager.send_progress_update(session_id, {
+        sse_manager.add_message(session_id, {
             "status": "started",
             "stage": "initializing",
             "progress_percentage": 0,
@@ -354,7 +428,7 @@ async def run_research_with_progress(request: ResearchRequest, session_id: str):
             else:
                 error_message = f"Invalid query format: {error_message}"
             
-            await connection_manager.send_progress_update(session_id, {
+            sse_manager.add_message(session_id, {
                 "status": "error",
                 "stage": "validation_error",
                 "progress_percentage": 0,
@@ -571,7 +645,7 @@ async def run_research_with_progress(request: ResearchRequest, session_id: str):
             if stored_research_plan:
                 progress_data["research_plan"] = stored_research_plan
             
-            await connection_manager.send_progress_update(session_id, progress_data)
+            sse_manager.add_message(session_id, progress_data)
             
             # 🔧 FIX: Add delay to ensure frontend has time to render in-progress state
             # This prevents stages from jumping immediately to checkmarks
@@ -688,7 +762,7 @@ async def run_research_with_progress(request: ResearchRequest, session_id: str):
             print(f"   Keep Metrics Visible: {final_completion_data['keep_metrics_visible']}")
             print(f"   Research Complete Flag: {final_completion_data['research_complete']}")
             print(f"Sending final completion update: status=completed, steps={len(research_stages)}/{len(research_stages)}")
-            await connection_manager.send_progress_update(session_id, final_completion_data)
+            sse_manager.add_message(session_id, final_completion_data)
             
             # Give frontend time to process the completion update
             await asyncio.sleep(0.5)
@@ -697,7 +771,7 @@ async def run_research_with_progress(request: ResearchRequest, session_id: str):
     
     except Exception as e:
         logger.error(f"Research failed: {e}")
-        await connection_manager.send_progress_update(session_id, {
+        sse_manager.add_message(session_id, {
             "status": "error",
             "message": str(e),
             "stage": "error"

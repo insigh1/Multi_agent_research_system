@@ -1,14 +1,37 @@
 {
-  "builds": [
-    {
-      "src": "api/*.py",
-      "use": "@vercel/python"
+  "functions": {
+    "api/index.py": {
+      "includeFiles": "backend/**"
     }
-  ],
-  "routes": [
+  },
+  "rewrites": [
     {
-      "src": "/api/(.*)",
-      "dest": "/api/index.py"
+      "source": "/api/(.*)",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/api/models",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/api/models/(.*)",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/api/research/(.*)",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/api/events/(.*)",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/api/config",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/api/health",
+      "destination": "/api/index.py"
     }
   ]
 } 
